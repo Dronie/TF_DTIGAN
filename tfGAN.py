@@ -98,36 +98,53 @@ def fc_layer(input_data, input_shape, num_units, activation, name):
     
     return layer_out, act_layer_out
 
-# --- define the generator network --- 
-# input: (None, 100)
-_, gen_fc1 = fc_layer(z, [None, params['latent_dim']], (50 * 50 * 64), "leaky_relu", "gen_fc1")
-# out: (None, 160000)
-gen_reshape = tf.reshape(gen_fc1, [-1 ,50, 50, 64])
-# out: (None, 50, 50, 64)
-gen_conv1 = conv_2d_layer(gen_fc1, 64, 128, (5, 5), "leaky_relu", (1, 1), "SAME", "gen_conv1")
-# out: (None, 50, 50, 128)
-gen_conv_t1 = conv_2d_transpose_layer(gen_conv1, 128, 128, (4, 4), (2, 2), "SAME", "gen_conv_t1")
-# out: (None, 100, 100, 128)
-gen_conv2 = conv_2d_layer(gen_conv_t1, 128, 128, (5, 5), "leaky_relu", (1, 1), "SAME", "gen_conv2")
-# out: (None, 100, 100, 128)
-gen_conv3 = conv_2d_layer(gen_conv2, 128, 128, (5, 5), "leaky_relu", (1, 1), "SAME", "gen_conv3")
-# out: (None, 100, 100, 128)
-gen_conv4 = conv_2d_layer(gen_conv3, 128, 3, (7, 7), "tanh", (1, 1), "SAME", "gen_conv4")
-# out: (None, 100, 100, 3)
+def concatenate_layer(real_data, generated_data):
+    layer_out = tf.concat(real_data, generated_data, 0)
+    return layer_out
 
-# --- define discriminator network ---
-# input: (None, 100, 100, 3)
-dis_conv1 = conv_2d_layer(x, [None, 100, 100, 3], 128, (3, 3), "leaky_relu", (1, 1), "VALID", "dis_conv1")
-# out: (None, 98, 98, 128)
-dis_conv2 = conv_2d_layer(dis_conv1, 128, 128, (4, 4), "leaky_relu", (2, 2), "VALID", "dis_conv2")
-# out: (None, 48, 48, 128)
-dis_conv3 = conv_2d_layer(dis_conv2, 128, 128, (4, 4), "leaky_relu", (2, 2), "VALID", "dis_conv3")
-# out: (None, 23, 23, 128)
-dis_conv4 = conv_2d_layer(dis_conv3, 128, 128, (4, 4), "leaky_relu", (2, 2), "VALID", "dis_conv4")
-# out: (None, 10, 10, 128)
-dis_flatten = tf.reshape(-1 , 10 * 10 * 128)
-# out: (None, 12800)
-dis_dropout = tf.nn.dropout(dis_flatten, rate=0.4)
-dis_output = fc_layer(dis_dropout, [-1 , 10 * 10 * 128], 1, "sigmoid", "dis_output")
-# out: (None, 1)
+# --- define the Generative Adversarial Network ---
+def generator(z):
+    # input: (None, 100) (random latent vector)
+    _, gen_fc1 = fc_layer(z, [None, params['latent_dim']], (50 * 50 * 64), "leaky_relu", "gen_fc1")
+    # out: (None, 160000)
+    gen_reshape = tf.reshape(gen_fc1, [-1 ,50, 50, 64])
+    # out: (None, 50, 50, 64)
+    gen_conv1 = conv_2d_layer(gen_fc1, 64, 128, (5, 5), "leaky_relu", (1, 1), "SAME", "gen_conv1")
+    # out: (None, 50, 50, 128)
+    gen_conv_t1 = conv_2d_transpose_layer(gen_conv1, 128, 128, (4, 4), (2, 2), "SAME", "gen_conv_t1")
+    # out: (None, 100, 100, 128)
+    gen_conv2 = conv_2d_layer(gen_conv_t1, 128, 128, (5, 5), "leaky_relu", (1, 1), "SAME", "gen_conv2")
+    # out: (None, 100, 100, 128)
+    gen_conv3 = conv_2d_layer(gen_conv2, 128, 128, (5, 5), "leaky_relu", (1, 1), "SAME", "gen_conv3")
+    # out: (None, 100, 100, 128)
+    gen_conv4 = conv_2d_layer(gen_conv3, 128, 3, (7, 7), "tanh", (1, 1), "SAME", "gen_conv4")
+    # out: (None, 100, 100, 3)
+    return gen_conv4
+
+def discriminator(x):
+    # input: (None, 100, 100, 3) concatenation of the real images with the generated images produced by the generator
+    dis_conv1 = conv_2d_layer(x, [None, 100, 100, 3], 128, (3, 3), "leaky_relu", (1, 1), "VALID", "dis_conv1")
+    # out: (None, 98, 98, 128)
+    dis_conv2 = conv_2d_layer(dis_conv1, 128, 128, (4, 4), "leaky_relu", (2, 2), "VALID", "dis_conv2")
+    # out: (None, 48, 48, 128)
+    dis_conv3 = conv_2d_layer(dis_conv2, 128, 128, (4, 4), "leaky_relu", (2, 2), "VALID", "dis_conv3")
+    # out: (None, 23, 23, 128)
+    dis_conv4 = conv_2d_layer(dis_conv3, 128, 128, (4, 4), "leaky_relu", (2, 2), "VALID", "dis_conv4")
+    # out: (None, 10, 10, 128)
+    dis_flatten = tf.reshape(-1 , 10 * 10 * 128)
+    # out: (None, 12800)
+    dis_dropout = tf.nn.dropout(dis_flatten, rate=0.4)
+    dis_output = fc_layer(dis_dropout, [-1 , 10 * 10 * 128], 1, "sigmoid", "dis_output")
+    # out: (None, 1) probability that the image being judged is real or generated
+    return dis_output
+
+samples = generator(z)
+real_score = discriminator(x)
+fake_score = discriminator(samples)
+
+# define a loss function
+loss = tf.reduce_mean(
+    tf.nn.sigmoid_cross_entropy_with_logits(logits=real_score, labels=tf.ones_like(real_score))+
+    tf.nn.sigmoid_cross_entropy_with_logits(logits=fake_score, labels=tf.zeros_like(fake_score))
+)
 
