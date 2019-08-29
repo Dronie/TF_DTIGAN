@@ -1,25 +1,50 @@
 import tensorflow as tf
 import numpy as np
+import glob
+import matplotlib.pyplot as plt
 
+# define dictionary for parameters
 params = dict(
     learning_rate = 0.5,
     batch_size = 50,
     epochs = 10,
-    z_dim = 50,
-    latent_dim = 100
+    z_dim = 100,
+    latent_dim = 100,
+    height = 100,
+    width = 100, 
+    channels = 3
 )
 
-# define placeholders (x: image data, z: random latent vectors, y: labels)
-x = tf.placeholder(tf.float32, shape=[params['batch_size'], 100, 100, 3])
-z = tf.placeholder(tf.float32, shape=[params['batch_size'], params['z_dim']])
-y = tf.placeholder(tf.float64, shape=[params['batch_size'] * 2, 1])
+# import data
+x_train = []
 
+for img_path in glob.glob("../image_data/good_frames/*.png"):
+    x_train.append(plt.imread(img_path))
+
+x_train = np.array(x_train)
+
+print("{} Images Imported!".format(len(x_train)))
+
+# normalize the data
+x_train = x_train.reshape((x_train.shape[0],) + (params['height'], params['width'], params['channels'])).astype('float32') / 255.
+
+# TO DO: make images greyscale
+
+# TO DO: setup noise input for z
+
+# define placeholders (x: image data, z: random latent vectors, y: labels)
+x = tf.compat.v1.placeholder(tf.float32, shape=[params['batch_size'], 100, 100, 3])
+z = tf.compat.v1.placeholder(tf.float32, shape=[params['batch_size'], params['z_dim']])
+y = tf.compat.v1.placeholder(tf.float64, shape=[params['batch_size'], 1])
+
+# setup function to return placeholder shape as np array
 def get_shape(placeholder):
     temp = []
     for i in placeholder.shape.dims:
         temp.append(i.value)
     return np.asarray(temp)
 
+# store shapes of placeholders
 x_shape = get_shape(x)
 z_shape = get_shape(z)
 y_shape = get_shape(y)
@@ -31,17 +56,17 @@ def conv_2d_layer(input_data, num_input_channels, num_filters, filter_shape, act
                         num_input_channels, num_filters]
     
     # init weights and bias
-    w = tf.get_variable(name+"_W", conv_filter_shape, tf.float32, tf.initializers.truncated_normal)
-    b = tf.get_variable(name+"_b", [num_filters], tf.float32, tf.initializers.truncated_normal)
+    w = tf.compat.v1.get_variable(name=name+"_W", shape=conv_filter_shape, dtype=tf.float32, initializer=tf.initializers.truncated_normal)
+    b = tf.compat.v1.get_variable(name=name+"_b", shape=[num_filters], dtype=tf.float32, initializer=tf.initializers.truncated_normal)
 
     # setup strides
     stride = [1, stride[0], stride[1], 1]
 
     # setup 2D convolution op
-    layer_out = tf.nn.conv2d(input_data, w, stride, padding=padding)
+    layer_out = tf.nn.conv2d(input=input_data, filter=w, strides=stride, padding=padding)
 
     # add bias
-    layer_out += b
+    layer_out = tf.nn.bias_add(layer_out, b)
 
     # apply specified activation function
     if activation == "leaky_relu":
@@ -53,24 +78,39 @@ def conv_2d_layer(input_data, num_input_channels, num_filters, filter_shape, act
 
     return layer_out
 
+# function to determine the input_shape of the conv_2d_transpose op
+def get_transpose_shape(output_shape, w, strides):
+    output = tf.compat.v1.placeholder(dtype=tf.float32, shape=output_shape)
+    w = tf.compat.v1.placeholder(dtype=tf.float32, shape=w.get_shape())
+    transpose_shape = tf.nn.conv2d(output, w, strides=strides, padding='SAME')
+    return transpose_shape
+
+
 # setup 2d conv transposed layer
 def conv_2d_transpose_layer(input_data, num_input_channels, num_filters, filter_shape, stride, padding, name):
     # setup filter shape
     conv_filter_shape = [filter_shape[0], filter_shape[1],
                         num_filters, num_input_channels] # NOTE: these two features a swapped in the cov2d_transpose operation for some reason
-    
+
+    input_shape = get_shape(input_data)
+
+    output_shape = [input_shape[0], input_shape[1] * 2, input_shape[2] * 2, num_filters]
+
     # init weights and bias
-    w = tf.get_variable(name=name+"_W", shape=conv_filter_shape, dtype=tf.float32, initializer=tf.initializers.truncated_normal)
-    b = tf.get_variable(name=name+"_b", shape=[num_filters], dtype=tf.float32, initializer=tf.initializers.truncated_normal)
+    w = tf.compat.v1.get_variable(name=name+"_W", shape=conv_filter_shape, dtype=tf.float32, initializer=tf.initializers.truncated_normal)
+    b = tf.compat.v1.get_variable(name=name+"_b", shape=[num_filters], dtype=tf.float32, initializer=tf.initializers.truncated_normal)
 
     # setup strides
     stride = [1, stride[0], stride[1], 1]
 
+    # get the correct input to produce the desired output shape from the 'deconvolution' op
+    conv_2d_transpose_input = get_transpose_shape(output_shape, w, stride)
+
     # setup conv 2d transpose op
-    layer_out = tf.nn.conv2d_transpose(input_data, w, stride, padding=padding)
+    layer_out = tf.nn.conv2d_transpose(value=conv_2d_transpose_input, filter=w, output_shape=output_shape, strides=stride, padding=padding)
 
     # add bias
-    layer_out += b
+    layer_out = tf.nn.bias_add(layer_out, b)
 
     # apply leaky relu
     layer_out = tf.nn.leaky_relu(layer_out)
@@ -90,11 +130,14 @@ def avg_pooling(input_data, pool_shape, stride, padding):
 # setup fully connected layer op
 def fc_layer(input_data, input_shape, num_units, activation, name):
     # setup weights and bias
-    w = tf.get_variable(name=name+"_W", shape=list(np.concatenate(input_shape, num_units)), dtype=tf.float32, initializer=tf.initializers.truncated_normal)
-    b = tf.get_variable(name=name+"_b", shape=[num_units], dtype=tf.float32, initializer=tf.initializers.truncated_normal)
+    w = tf.compat.v1.get_variable(name=name+"_W", shape=[input_shape[1], num_units], dtype=tf.float32, initializer=tf.initializers.truncated_normal)
+    b = tf.compat.v1.get_variable(name=name+"_b", shape=[num_units], dtype=tf.float32, initializer=tf.initializers.truncated_normal)
 
     # setup matmul op
-    layer_out = tf.add(tf.matmul(input_data, w), b)
+    layer_out = tf.matmul(input_data, w)
+    
+    # add bias
+    layer_out = tf.nn.bias_add(layer_out, b)
 
     # apply specified activtion function
     if activation == "relu":
@@ -110,55 +153,99 @@ def fc_layer(input_data, input_shape, num_units, activation, name):
     
     return layer_out, act_layer_out
 
+# abstraction function to concat two tensors
 def concatenate_layer(real_data, generated_data):
     layer_out = tf.concat(real_data, generated_data, 0)
     return layer_out
 
 # --- define the Generative Adversarial Network ---
-def generator(z):
+# ----- define Generator Network -----
+def generator(z, name):
     with tf.compat.v1.variable_scope("generator"):
-        # input: (None, 100) (random latent vector)
-        _, gen_fc1 = fc_layer(z, z_shape, (50 * 50 * 64), "leaky_relu", "gen_fc1")
-        # out: (None, 160000)
+        print("-----{} Summary-----".format(name))
+
+        # input: (batch_size, 100) (random latent vector)
+        print("gen_input output shape:", get_shape(z))
+
+        _, gen_fc1 = fc_layer(z, z_shape, (50 * 50 * 64), "leaky_relu", "gen_fc1") 
+        # out: (batch_size 160000)
+        print("gen_fc1 output shape:", get_shape(gen_fc1))
+
         gen_reshape = tf.reshape(gen_fc1, [-1 ,50, 50, 64])
-        # out: (None, 50, 50, 64)
+        # out: (batch_size 50, 50, 64)
+        print("gen_reshape output shape:", get_shape(gen_reshape))
+
         gen_conv1 = conv_2d_layer(gen_reshape, 64, 128, (5, 5), "leaky_relu", (1, 1), "SAME", "gen_conv1")
-        # out: (None, 50, 50, 128)
+        # out: (batch_size 50, 50, 128)
+        print("gen_conv1 output shape:", get_shape(gen_conv1))
+
         gen_conv_t1 = conv_2d_transpose_layer(gen_conv1, 128, 128, (4, 4), (2, 2), "SAME", "gen_conv_t1")
-        # out: (None, 100, 100, 128)
+        # out: (batch_size 100, 100, 128)
+        print("gen_conv_t1 output shape:", get_shape(gen_conv_t1))
+
         gen_conv2 = conv_2d_layer(gen_conv_t1, 128, 128, (5, 5), "leaky_relu", (1, 1), "SAME", "gen_conv2")
-        # out: (None, 100, 100, 128)
+        # out: (batch_size 100, 100, 128)
+        print("gen_conv2 output shape:", get_shape(gen_conv2))
+
         gen_conv3 = conv_2d_layer(gen_conv2, 128, 128, (5, 5), "leaky_relu", (1, 1), "SAME", "gen_conv3")
-        # out: (None, 100, 100, 128)
+        # out: (batch_size 100, 100, 128)
+        print("gen_conv3 output shape:", get_shape(gen_conv3))
+
         gen_conv4 = conv_2d_layer(gen_conv3, 128, 3, (7, 7), "tanh", (1, 1), "SAME", "gen_conv4")
-        # out: (None, 100, 100, 3)
+        # out: (batch_size 100, 100, 3)
+        print("gen_conv4 output shape:", get_shape(gen_conv4))
+
     return gen_conv4
 
-def discriminator(x, reuse=False):
+# ----- define Discriminator Network -----
+def discriminator(x, name, reuse=False):
     with tf.compat.v1.variable_scope("discriminator", reuse=reuse):
-        # input: (None, 100, 100, 3) concatenation of the real images with the generated images produced by the generator
-        dis_conv1 = conv_2d_layer(x, x_shape, 128, (3, 3), "leaky_relu", (1, 1), "VALID", "dis_conv1")
-        # out: (None, 98, 98, 128)
+        print("-----{} Summary-----".format(name))
+
+        # input: (batch_size 100, 100, 3) concatenation of the real images with the generated images produced by the generator
+        print("dis_input output shape:", get_shape(x))
+
+        dis_conv1 = conv_2d_layer(x, 3, 128, (3, 3), "leaky_relu", (1, 1), "VALID", "dis_conv1")
+        # out: (batch_size 98, 98, 128)
+        print("dis_conv1 output shape:", get_shape(dis_conv1))
+
         dis_conv2 = conv_2d_layer(dis_conv1, 128, 128, (4, 4), "leaky_relu", (2, 2), "VALID", "dis_conv2")
-        # out: (None, 48, 48, 128)
+        # out: (batch_size 48, 48, 128)
+        print("dis_conv2 output shape:", get_shape(dis_conv2))
+
         dis_conv3 = conv_2d_layer(dis_conv2, 128, 128, (4, 4), "leaky_relu", (2, 2), "VALID", "dis_conv3")
-        # out: (None, 23, 23, 128)
+        # out: (batch_size 23, 23, 128)
+        print("dis_conv3 output shape:", get_shape(dis_conv3))
+
         dis_conv4 = conv_2d_layer(dis_conv3, 128, 128, (4, 4), "leaky_relu", (2, 2), "VALID", "dis_conv4")
-        # out: (None, 10, 10, 128)
+        # out: (batch_size 10, 10, 128)
+        print("dis_conv4 output shape:", get_shape(dis_conv4))
+
         dis_flatten = tf.reshape(dis_conv4, [-1, 10 * 10 * 128])
-        # out: (None, 12800)
+        # out: (batch_size 12800)
+        print("dis_flatten output shape:", get_shape(dis_flatten))
+
         dis_dropout = tf.nn.dropout(dis_flatten, rate=0.4)
-        dis_output = fc_layer(dis_dropout, [-1 , 10 * 10 * 128], 1, "sigmoid", "dis_output")
-        # out: (None, 1) probability that the image being judged is real or generated
+        # out: (batch_size 12800)
+        print("dis_dropout output shape:", get_shape(dis_dropout))
+
+        _, dis_output = fc_layer(dis_dropout, [params['batch_size'], 10 * 10 * 128], 1, "sigmoid", "dis_output")
+        # out: (batch_size 1) probability that the image being judged is real or generated
+        print("dis_output output shape:", get_shape(dis_output))
     return dis_output
 
-samples = generator(z)
-real_score = discriminator(x)
-fake_score = discriminator(samples, reuse=True)
+# create networks
+samples = generator(z=z, name="Generator")
+real_score = discriminator(x=x, name="Discriminator (real_score)")
+fake_score = discriminator(x=samples, name="Discriminator (fake_score)", reuse=True)
 
-# define a loss function
+# define the loss function
 loss = tf.reduce_mean(
-    tf.nn.sigmoid_cross_entropy_with_logits(logits=real_score, labels=tf.ones_like(real_score))+
+    tf.nn.sigmoid_cross_entropy_with_logits(logits=real_score, labels=tf.ones_like(real_score)) +
     tf.nn.sigmoid_cross_entropy_with_logits(logits=fake_score, labels=tf.zeros_like(fake_score))
 )
+
+# TO DO: setup optimizer
+
+# TO DO: setup learning procedures
 
