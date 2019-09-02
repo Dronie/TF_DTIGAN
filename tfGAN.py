@@ -1,41 +1,70 @@
+import os
 import tensorflow as tf
+import tensorflow_probability as tfp
 import numpy as np
 import glob
 import matplotlib.pyplot as plt
+from skimage.color import rgb2gray
+from tqdm import tqdm
 
-# define dictionary for parameters
-params = dict(
-    learning_rate = 0.5,
-    batch_size = 50,
-    epochs = 10,
-    z_dim = 100,
-    latent_dim = 100,
-    height = 100,
-    width = 100, 
-    channels = 3
-)
+# TO DO: find a way to remove excessive tf warnings 
 
 # import data
+image_path = "../image_data/bad_frames/*.png"
+
+print("Importing Images from: {}\n".format(image_path))
+
 x_train = []
 
-for img_path in glob.glob("../image_data/good_frames/*.png"):
+for img_path in tqdm(glob.glob(image_path)):
     x_train.append(plt.imread(img_path))
 
 x_train = np.array(x_train)
 
-print("{} Images Imported!".format(len(x_train)))
+print("\n{} Images Imported!".format(len(x_train)))
 
 # normalize the data
-x_train = x_train.reshape((x_train.shape[0],) + (params['height'], params['width'], params['channels'])).astype('float32') / 255.
+x_train = x_train / 255.
 
-# TO DO: make images greyscale
+# define dictionary for parameters
+params = dict(
+    batch_size = 50,
+    epochs = 10,
 
-# TO DO: setup noise input for z
+    latent_dim = 100,
+    height = 100,
+    width = 100, 
+    channels = 3,
 
-# define placeholders (x: image data, z: random latent vectors, y: labels)
-x = tf.compat.v1.placeholder(tf.float32, shape=[params['batch_size'], 100, 100, 3])
-z = tf.compat.v1.placeholder(tf.float32, shape=[params['batch_size'], params['z_dim']])
+    disc_learning_rate = 1e-4,
+    gen_learning_rate=1e-3,
+    beta1=0.5,
+    epsilon=1e-8
+)
+
+# TO DO: make images greyscale # skimage.color.rgb2gray() completely removes the 'channels' axis, making it unsuitible for feeding into the tf networks
+
+#x_train = rgb2gray(x_train) 
+
+# TO DO: create a tf dataset and place data in there (see: https://towardsdatascience.com/how-to-use-dataset-in-tensorflow-c758ef9e4428)
+
+
+# Create tensorflow dataset and corresponding iterator with the imported data
+dataset = tf.data.Dataset.from_tensor_slices(x_train).batch(params['batch_size'])
+iterator = dataset.make_one_shot_iterator()
+x = iterator.get_next()
+
+# setup noise for z (returns a (50, 100) sample of gaussian noise)
+def get_noise():
+    noise = tfp.distributions.Normal(tf.zeros(params['latent_dim']), tf.ones(params['latent_dim'])).sample(params['batch_size'])
+    return noise
+
+# define placeholders (x: image data, z: random latent vectors, y: labels) NOTE: UNUSED
+'''
+x = tf.compat.v1.placeholder(tf.float32, shape=[params['batch_size'], params['height'], params['width'], params['channels']])
+z = tf.compat.v1.placeholder(tf.float32, shape=[params['batch_size'], params['latent_dim']])
 y = tf.compat.v1.placeholder(tf.float64, shape=[params['batch_size'], 1])
+'''
 
 # setup function to return placeholder shape as np array
 def get_shape(placeholder):
@@ -44,10 +73,12 @@ def get_shape(placeholder):
         temp.append(i.value)
     return np.asarray(temp)
 
-# store shapes of placeholders
+# store shapes of placeholders NOTE: UNUSED
+'''
 x_shape = get_shape(x)
 z_shape = get_shape(z)
 y_shape = get_shape(y)
+'''
 
 # setup 2d convolution layer
 def conv_2d_layer(input_data, num_input_channels, num_filters, filter_shape, activation, stride, padding, name):
@@ -70,7 +101,7 @@ def conv_2d_layer(input_data, num_input_channels, num_filters, filter_shape, act
 
     # apply specified activation function
     if activation == "leaky_relu":
-        layer_out = tf.nn.leaky_relu(layer_out)#
+        layer_out = tf.nn.leaky_relu(layer_out)
     elif activation == "tanh":
         layer_out = tf.nn.tanh(layer_out)
     else:
@@ -78,10 +109,12 @@ def conv_2d_layer(input_data, num_input_channels, num_filters, filter_shape, act
 
     return layer_out
 
-# function to determine the input_shape of the conv_2d_transpose op
+# function to determine the input_shape of the conv_2d_transpose op NOTE: UNUSED
 def get_transpose_shape(output_shape, w, strides):
-    output = tf.compat.v1.placeholder(dtype=tf.float32, shape=output_shape)
-    w = tf.compat.v1.placeholder(dtype=tf.float32, shape=w.get_shape())
+    output = np.ones(shape=output_shape)
+    w = np.ones(shape=w.get_shape())
+    #output = tf.compat.v1.placeholder(dtype=tf.float32, shape=output_shape) # PROBLEM: placeholders require feeding, find solution that doesnt use placeholders
+    #w = tf.compat.v1.placeholder(dtype=tf.float32, shape=w.get_shape()) #
     transpose_shape = tf.nn.conv2d(output, w, strides=strides, padding='SAME')
     return transpose_shape
 
@@ -103,11 +136,8 @@ def conv_2d_transpose_layer(input_data, num_input_channels, num_filters, filter_
     # setup strides
     stride = [1, stride[0], stride[1], 1]
 
-    # get the correct input to produce the desired output shape from the 'deconvolution' op
-    conv_2d_transpose_input = get_transpose_shape(output_shape, w, stride)
-
     # setup conv 2d transpose op
-    layer_out = tf.nn.conv2d_transpose(value=conv_2d_transpose_input, filter=w, output_shape=output_shape, strides=stride, padding=padding)
+    layer_out = tf.nn.conv2d_transpose(value=input_data, filter=w, output_shape=output_shape, strides=stride, padding=padding)
 
     # add bias
     layer_out = tf.nn.bias_add(layer_out, b)
@@ -167,7 +197,7 @@ def generator(z, name):
         # input: (batch_size, 100) (random latent vector)
         print("gen_input output shape:", get_shape(z))
 
-        _, gen_fc1 = fc_layer(z, z_shape, (50 * 50 * 64), "leaky_relu", "gen_fc1") 
+        _, gen_fc1 = fc_layer(z, get_shape(z), (50 * 50 * 64), "leaky_relu", "gen_fc1") 
         # out: (batch_size 160000)
         print("gen_fc1 output shape:", get_shape(gen_fc1))
 
@@ -235,7 +265,7 @@ def discriminator(x, name, reuse=False):
     return dis_output
 
 # create networks
-samples = generator(z=z, name="Generator")
+samples = generator(z=get_noise(), name="Generator")
 real_score = discriminator(x=x, name="Discriminator (real_score)")
 fake_score = discriminator(x=samples, name="Discriminator (fake_score)", reuse=True)
 
@@ -245,7 +275,25 @@ loss = tf.reduce_mean(
     tf.nn.sigmoid_cross_entropy_with_logits(logits=fake_score, labels=tf.zeros_like(fake_score))
 )
 
-# TO DO: setup optimizer
+gen_vars = tf.compat.v1.get_collection(tf.compat.v1.GraphKeys.TRAINABLE_VARIABLES, "generator")
+disc_vars = tf.compat.v1.get_collection(tf.compat.v1.GraphKeys.TRAINABLE_VARIABLES, "discriminator")
 
-# TO DO: setup learning procedures
+# setup optimizers and update routines
+
+# Discriminator update
+d_opt = tf.compat.v1.train.AdamOptimizer(learning_rate=params['disc_learning_rate'], beta1=params['beta1'], epsilon=params['epsilon'])
+d_opt = d_opt.minimize(loss)
+
+# Generator update
+g_opt = tf.compat.v1.train.AdamOptimizer(learning_rate=params['gen_learning_rate'], beta1=params['beta1'], epsilon=params['epsilon'])
+g_opt = g_opt.minimize(loss)
+
+#setup learning procedures
+sess = tf.InteractiveSession()
+sess.run(tf.global_variables_initializer())
+
+# start training loop
+for i in tqdm(range(params['epochs'])):
+    _, _, l = sess.run([g_opt, d_opt, loss])
+    print("Epoch: {} loss ----- {}".format(i, l))
 
