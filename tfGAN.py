@@ -54,6 +54,8 @@ dataset = tf.data.Dataset.from_tensor_slices(x_train).batch(params['batch_size']
 iterator = dataset.make_one_shot_iterator()
 x = iterator.get_next()
 
+# PROBLEM: dataset is not a multiple of batch_size so an error occurs. Find out if there is a method to get random samples from the dataset instead
+
 # setup noise for z (returns a (50, 100) sample of gaussian noise)
 def get_noise():
     noise = tfp.distributions.Normal(tf.zeros(params['latent_dim']), tf.ones(params['latent_dim'])).sample(params['batch_size'])
