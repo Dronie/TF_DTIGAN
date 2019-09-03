@@ -54,8 +54,6 @@ dataset = dataset.repeat(count=None)
 iterator = dataset.make_one_shot_iterator()
 x = iterator.get_next()
 
-# TO DO: Find a way to get random samples from a tensorflow dataset
-
 # setup noise for z (returns a (50, 100) sample of gaussian noise)
 def get_noise():
     noise = tfp.distributions.Normal(tf.zeros(params['latent_dim']), tf.ones(params['latent_dim'])).sample(params['batch_size'])
