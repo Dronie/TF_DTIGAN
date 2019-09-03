@@ -28,8 +28,8 @@ x_train = x_train / 255.
 
 # define dictionary for parameters
 params = dict(
-    batch_size = 50,
-    epochs = 10,
+    batch_size = 25,
+    epochs = 10000,
 
     latent_dim = 100,
     height = 100,
@@ -37,22 +37,24 @@ params = dict(
     channels = 3,
 
     disc_learning_rate = 1e-4,
-    gen_learning_rate=1e-3,
-    beta1=0.5,
-    epsilon=1e-8
+    gen_learning_rate= 0.00001,
+    beta1=0.9,
+    beta2=0.999,
+    epsilon=1e-07
 )
 
 # TO DO: make images greyscale # skimage.color.rgb2gray() completely removes the 'channels' axis, making it unsuitible for feeding into the tf networks
 
 #x_train = rgb2gray(x_train) 
 
-# TO DO: create a tf dataset and place data in there (see: https://towardsdatascience.com/how-to-use-dataset-in-tensorflow-c758ef9e4428)
-
-
 # Create tensorflow dataset and corresponding iterator with the imported data
 dataset = tf.data.Dataset.from_tensor_slices(x_train).batch(params['batch_size'])
+dataset = dataset.shuffle(len(x_train))
+dataset = dataset.repeat(count=None)
 iterator = dataset.make_one_shot_iterator()
 x = iterator.get_next()
+
+# TO DO: Find a way to get random samples from a tensorflow dataset
 
 # setup noise for z (returns a (50, 100) sample of gaussian noise)
 def get_noise():
@@ -281,19 +283,31 @@ disc_vars = tf.compat.v1.get_collection(tf.compat.v1.GraphKeys.TRAINABLE_VARIABL
 # setup optimizers and update routines
 
 # Discriminator update
-d_opt = tf.compat.v1.train.AdamOptimizer(learning_rate=params['disc_learning_rate'], beta1=params['beta1'], epsilon=params['epsilon'])
+d_opt = tf.compat.v1.train.GradientDescentOptimizer(learning_rate=params['disc_learning_rate'])
 d_opt = d_opt.minimize(loss)
 
 # Generator update
-g_opt = tf.compat.v1.train.AdamOptimizer(learning_rate=params['gen_learning_rate'], beta1=params['beta1'], epsilon=params['epsilon'])
+g_opt = tf.compat.v1.train.AdamOptimizer(learning_rate=params['gen_learning_rate'],
+                                        beta1=params['beta1'],
+                                        beta2=params['beta2'], 
+                                        epsilon=params['epsilon'])
 g_opt = g_opt.minimize(loss)
 
 #setup learning procedures
 sess = tf.InteractiveSession()
-sess.run(tf.global_variables_initializer())
+sess.run(tf.compat.v1.global_variables_initializer())
 
 # start training loop
+losses = []
 for i in tqdm(range(params['epochs'])):
     _, _, l = sess.run([g_opt, d_opt, loss])
     print("Epoch: {} loss ----- {}".format(i, l))
+    losses.append(l)
+    if i % 100 == 0:
+        plt.imshow(sess.run(samples)[0])
+        plt.savefig("{}_epochs.png".format(i), format='png')
 
+plt.plot(range(params['epochs']), losses)
+plt.savefig("loss_plot.png", format='png')
+
+# TO DO: find out why the only output for the generator is noise, maybe something isn't connected properly? Check tensorboard
