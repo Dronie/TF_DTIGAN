@@ -9,6 +9,8 @@ from tqdm import tqdm
 
 # TO DO: find a way to remove excessive tf warnings 
 
+#writer = tf.summary.FileWriter("/home/stefan/tmp/gan/4")
+
 # import data
 image_path = "../image_data/bad_frames/*.png"
 
@@ -48,15 +50,17 @@ params = dict(
 #x_train = rgb2gray(x_train) 
 
 # Create tensorflow dataset and corresponding iterator with the imported data
-dataset = tf.data.Dataset.from_tensor_slices(x_train).batch(params['batch_size'])
-dataset = dataset.shuffle(len(x_train))
-dataset = dataset.repeat(count=None)
-iterator = dataset.make_one_shot_iterator()
-x = iterator.get_next()
+with tf.name_scope("data"):
+    dataset = tf.data.Dataset.from_tensor_slices(x_train).batch(params['batch_size'])
+    dataset = dataset.shuffle(len(x_train))
+    dataset = dataset.repeat(count=None)
+    iterator = dataset.make_one_shot_iterator()
+    x = iterator.get_next()
 
 # setup noise for z (returns a (50, 100) sample of gaussian noise)
 def get_noise():
-    noise = tfp.distributions.Normal(tf.zeros(params['latent_dim']), tf.ones(params['latent_dim'])).sample(params['batch_size'])
+    with tf.name_scope("noise"):
+        noise = tfp.distributions.Normal(tf.zeros(params['latent_dim']), tf.ones(params['latent_dim'])).sample(params['batch_size'])
     return noise
 
 # define placeholders (x: image data, z: random latent vectors, y: labels) NOTE: UNUSED
@@ -82,32 +86,34 @@ y_shape = get_shape(y)
 
 # setup 2d convolution layer
 def conv_2d_layer(input_data, num_input_channels, num_filters, filter_shape, activation, stride, padding, name):
-    # setup filter shape
-    conv_filter_shape = [filter_shape[0], filter_shape[1],
-                        num_input_channels, num_filters]
+    with tf.name_scope("conv2d"):
+
+        # setup filter shape
+        conv_filter_shape = [filter_shape[0], filter_shape[1],
+                            num_input_channels, num_filters]
     
-    # init weights and bias
-    w = tf.compat.v1.get_variable(name=name+"_W", shape=conv_filter_shape, dtype=tf.float32, initializer=tf.initializers.truncated_normal)
-    b = tf.compat.v1.get_variable(name=name+"_b", shape=[num_filters], dtype=tf.float32, initializer=tf.initializers.truncated_normal)
+        # init weights and bias
+        w = tf.compat.v1.get_variable(name=name+"_W", shape=conv_filter_shape, dtype=tf.float32, initializer=tf.initializers.truncated_normal)
+        b = tf.compat.v1.get_variable(name=name+"_b", shape=[num_filters], dtype=tf.float32, initializer=tf.initializers.truncated_normal)
 
-    # setup strides
-    stride = [1, stride[0], stride[1], 1]
+        # setup strides
+        stride = [1, stride[0], stride[1], 1]
 
-    # setup 2D convolution op
-    layer_out = tf.nn.conv2d(input=input_data, filter=w, strides=stride, padding=padding)
+        # setup 2D convolution op
+        layer_out = tf.nn.conv2d(input=input_data, filter=w, strides=stride, padding=padding)
 
-    # add bias
-    layer_out = tf.nn.bias_add(layer_out, b)
+        # add bias
+        layer_out = layer_out + b
 
-    # apply specified activation function
-    if activation == "leaky_relu":
-        layer_out = tf.nn.leaky_relu(layer_out)
-    elif activation == "tanh":
-        layer_out = tf.nn.tanh(layer_out)
-    else:
-        raise Exception('Error({}) - None or invalid activation function specified:({})'.format(name, activation))
+        # apply specified activation function
+        if activation == "leaky_relu":
+            layer_out = tf.nn.leaky_relu(layer_out)
+        elif activation == "tanh":
+            layer_out = tf.nn.tanh(layer_out)
+        else:
+            raise Exception('Error({}) - None or invalid activation function specified:({})'.format(name, activation))
 
-    return layer_out
+        return layer_out
 
 # function to determine the input_shape of the conv_2d_transpose op NOTE: UNUSED
 def get_transpose_shape(output_shape, w, strides):
@@ -121,67 +127,70 @@ def get_transpose_shape(output_shape, w, strides):
 
 # setup 2d conv transposed layer
 def conv_2d_transpose_layer(input_data, num_input_channels, num_filters, filter_shape, stride, padding, name):
-    # setup filter shape
-    conv_filter_shape = [filter_shape[0], filter_shape[1],
-                        num_filters, num_input_channels] # NOTE: these two features a swapped in the cov2d_transpose operation for some reason
+    with tf.name_scope("deconv"):
+        # setup filter shape
+        conv_filter_shape = [filter_shape[0], filter_shape[1],
+                            num_filters, num_input_channels] # NOTE: these two features a swapped in the cov2d_transpose operation for some reason
 
-    input_shape = get_shape(input_data)
+        input_shape = get_shape(input_data)
 
-    output_shape = [input_shape[0], input_shape[1] * 2, input_shape[2] * 2, num_filters]
+        output_shape = [input_shape[0], input_shape[1] * 2, input_shape[2] * 2, num_filters]
 
-    # init weights and bias
-    w = tf.compat.v1.get_variable(name=name+"_W", shape=conv_filter_shape, dtype=tf.float32, initializer=tf.initializers.truncated_normal)
-    b = tf.compat.v1.get_variable(name=name+"_b", shape=[num_filters], dtype=tf.float32, initializer=tf.initializers.truncated_normal)
+        # init weights and bias
+        w = tf.compat.v1.get_variable(name=name+"_W", shape=conv_filter_shape, dtype=tf.float32, initializer=tf.initializers.truncated_normal)
+        b = tf.compat.v1.get_variable(name=name+"_b", shape=[num_filters], dtype=tf.float32, initializer=tf.initializers.truncated_normal)
 
-    # setup strides
-    stride = [1, stride[0], stride[1], 1]
+        # setup strides
+        stride = [1, stride[0], stride[1], 1]
 
-    # setup conv 2d transpose op
-    layer_out = tf.nn.conv2d_transpose(value=input_data, filter=w, output_shape=output_shape, strides=stride, padding=padding)
+        # setup conv 2d transpose op
+        layer_out = tf.nn.conv2d_transpose(value=input_data, filter=w, output_shape=output_shape, strides=stride, padding=padding)
 
-    # add bias
-    layer_out = tf.nn.bias_add(layer_out, b)
+        # add bias
+        layer_out = layer_out + b
 
-    # apply leaky relu
-    layer_out = tf.nn.leaky_relu(layer_out)
+        # apply leaky relu
+        layer_out = tf.nn.leaky_relu(layer_out)
 
-    return layer_out
+        return layer_out
 
 # setup average pooling layer
 def avg_pooling(input_data, pool_shape, stride, padding):
-    # setup kernal size
-    ksize = [1, pool_shape[0], pool_shape[1], 1]
-    stride = [1, stride[0], stride[1], 1]
+    with tf.name_scope("avg_pool"):
+        # setup kernal size
+        ksize = [1, pool_shape[0], pool_shape[1], 1]
+        stride = [1, stride[0], stride[1], 1]
 
-    # setup average pool op 
-    layer_out = tf.nn.avg_pool(input_data, ksize=ksize, strides=stride, padding=padding)
-    return layer_out
+        # setup average pool op 
+        layer_out = tf.nn.avg_pool(input_data, ksize=ksize, strides=stride, padding=padding)
+        return layer_out
 
 # setup fully connected layer op
 def fc_layer(input_data, input_shape, num_units, activation, name):
-    # setup weights and bias
-    w = tf.compat.v1.get_variable(name=name+"_W", shape=[input_shape[1], num_units], dtype=tf.float32, initializer=tf.initializers.truncated_normal)
-    b = tf.compat.v1.get_variable(name=name+"_b", shape=[num_units], dtype=tf.float32, initializer=tf.initializers.truncated_normal)
+    with tf.name_scope("fc"):
+        # setup weights and bias
+        w = tf.compat.v1.get_variable(name=name+"_W", shape=[input_shape[1], num_units], dtype=tf.float32, initializer=tf.initializers.truncated_normal)
+        b = tf.compat.v1.get_variable(name=name+"_b", shape=[num_units], dtype=tf.float32, initializer=tf.initializers.truncated_normal)
 
-    # setup matmul op
-    layer_out = tf.matmul(input_data, w)
+        # setup matmul op
+        layer_out = tf.matmul(input_data, w)
     
-    # add bias
-    layer_out = tf.nn.bias_add(layer_out, b)
+        # add bias
+        layer_out = layer_out + b
 
-    # apply specified activtion function
-    if activation == "relu":
-        act_layer_out = tf.nn.relu(layer_out)
-    elif activation == "softmax":
-        act_layer_out = tf.nn.softmax(layer_out)
-    elif activation == "leaky_relu":
-        act_layer_out = tf.nn.leaky_relu(layer_out)
-    elif activation == "sigmoid":
-        act_layer_out = tf.nn.sigmoid(layer_out)
-    else:
-        raise Exception('Error({}) - None or invalid activation function specified:({})'.format(name, activation))
+        # apply specified activtion function
+        if activation == "relu":
+            act_layer_out = tf.nn.relu(layer_out)
+        elif activation == "softmax":
+            act_layer_out = tf.nn.softmax(layer_out)
+        elif activation == "leaky_relu":
+            act_layer_out = tf.nn.leaky_relu(layer_out)
+        elif activation == "sigmoid":
+            act_layer_out = tf.nn.sigmoid(layer_out)
+        else:
+            raise Exception('Error({}) - None or invalid activation function specified:({})'.format(name, activation))
     
-    return layer_out, act_layer_out
+        return layer_out, act_layer_out
 
 # abstraction function to concat two tensors
 def concatenate_layer(real_data, generated_data):
@@ -259,21 +268,26 @@ def discriminator(x, name, reuse=False):
         # out: (batch_size 12800)
         print("dis_dropout output shape:", get_shape(dis_dropout))
 
-        _, dis_output = fc_layer(dis_dropout, [params['batch_size'], 10 * 10 * 128], 1, "sigmoid", "dis_output")
+        _, dis_output = fc_layer(dis_dropout, [-1, 10 * 10 * 128], 1, "sigmoid", "dis_output")
         # out: (batch_size 1) probability that the image being judged is real or generated
         print("dis_output output shape:", get_shape(dis_output))
     return dis_output
 
 # create networks
 samples = generator(z=get_noise(), name="Generator")
-real_score = discriminator(x=x, name="Discriminator (real_score)")
-fake_score = discriminator(x=samples, name="Discriminator (fake_score)", reuse=True)
+discrim = discriminator(x=tf.concat([x, samples], 0), name="Discriminator (real_score)")
+gan_model = discriminator(x=samples, name="Discriminator (fake_score)", reuse=True)
 
 # define the loss function
-loss = tf.reduce_mean(
-    tf.nn.sigmoid_cross_entropy_with_logits(logits=real_score, labels=tf.ones_like(real_score)) +
-    tf.nn.sigmoid_cross_entropy_with_logits(logits=fake_score, labels=tf.zeros_like(fake_score))
-)
+with tf.name_scope("d_loss"):
+    d_loss = tf.reduce_mean(
+        tf.nn.sigmoid_cross_entropy_with_logits(logits=discrim, labels=tf.concat([tf.ones([25,1]), tf.zeros([25,1])], 0))
+    )
+
+with tf.name_scope("a_loss"):
+    a_loss = tf.reduce_mean(
+        tf.nn.sigmoid_cross_entropy_with_logits(logits=gan_model, labels=tf.zeros_like(gan_model))
+    )
 
 gen_vars = tf.compat.v1.get_collection(tf.compat.v1.GraphKeys.TRAINABLE_VARIABLES, "generator")
 disc_vars = tf.compat.v1.get_collection(tf.compat.v1.GraphKeys.TRAINABLE_VARIABLES, "discriminator")
@@ -281,31 +295,35 @@ disc_vars = tf.compat.v1.get_collection(tf.compat.v1.GraphKeys.TRAINABLE_VARIABL
 # setup optimizers and update routines
 
 # Discriminator update
-d_opt = tf.compat.v1.train.GradientDescentOptimizer(learning_rate=params['disc_learning_rate'])
-d_opt = d_opt.minimize(loss)
+with tf.name_scope("d_train"):
+    d_opt = tf.compat.v1.train.GradientDescentOptimizer(learning_rate=params['disc_learning_rate'])
+    d_opt = d_opt.minimize(d_loss)
 
 # Generator update
-g_opt = tf.compat.v1.train.AdamOptimizer(learning_rate=params['gen_learning_rate'],
-                                        beta1=params['beta1'],
-                                        beta2=params['beta2'], 
-                                        epsilon=params['epsilon'])
-g_opt = g_opt.minimize(loss)
+with tf.name_scope("g_train"):
+    g_opt = tf.compat.v1.train.AdamOptimizer(learning_rate=params['gen_learning_rate'],
+                                            beta1=params['beta1'],
+                                            beta2=params['beta2'], 
+                                            epsilon=params['epsilon'])
+    g_opt = g_opt.minimize(a_loss)
 
 #setup learning procedures
 sess = tf.InteractiveSession()
 sess.run(tf.compat.v1.global_variables_initializer())
 
+#writer.add_graph(sess.graph)
+print("Graph added!")
+
 # start training loop
-losses = []
+a_losses = []
+d_losses = []
 for i in tqdm(range(params['epochs'])):
-    _, _, l = sess.run([g_opt, d_opt, loss])
-    print("Epoch: {} loss ----- {}".format(i, l))
-    losses.append(l)
+    _, _, l, ll = sess.run([g_opt, d_opt, d_loss, a_loss])
+    print("Epoch: {} d_loss|a_loss ----- {}|{}".format(i, l, ll))
+    d_losses.append(l)
+    a_losses.append(ll)
     if i % 100 == 0:
         plt.imshow(sess.run(samples)[0])
         plt.savefig("{}_epochs.png".format(i), format='png')
-
-plt.plot(range(params['epochs']), losses)
-plt.savefig("loss_plot.png", format='png')
 
 # TO DO: find out why the only output for the generator is noise, maybe something isn't connected properly? Check tensorboard
