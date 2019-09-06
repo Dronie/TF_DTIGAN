@@ -4,12 +4,13 @@ import tensorflow_probability as tfp
 import numpy as np
 import glob
 import matplotlib.pyplot as plt
-from skimage.color import rgb2gray
 from tqdm import tqdm
 
 # TO DO: find a way to remove excessive tf warnings 
 
-#writer = tf.summary.FileWriter("/home/stefan/tmp/gan/4")
+tf.compat.v1.random.set_random_seed(1234)
+
+writer = tf.summary.FileWriter("/home/stefan/tmp/gan/14")
 
 # import data
 image_path = "../image_data/bad_frames/*.png"
@@ -57,10 +58,13 @@ with tf.name_scope("data"):
     iterator = dataset.make_one_shot_iterator()
     x = iterator.get_next()
 
+tf.summary.image("Input:", x, params['batch_size'])
+
 # setup noise for z (returns a (50, 100) sample of gaussian noise)
 def get_noise():
     with tf.name_scope("noise"):
         noise = tfp.distributions.Normal(tf.zeros(params['latent_dim']), tf.ones(params['latent_dim'])).sample(params['batch_size'])
+        tf.summary.histogram("Noise:", noise)
     return noise
 
 # define placeholders (x: image data, z: random latent vectors, y: labels) NOTE: UNUSED
@@ -112,6 +116,10 @@ def conv_2d_layer(input_data, num_input_channels, num_filters, filter_shape, act
             layer_out = tf.nn.tanh(layer_out)
         else:
             raise Exception('Error({}) - None or invalid activation function specified:({})'.format(name, activation))
+        
+        tf.summary.histogram("Weights: ", w)
+        tf.summary.histogram("Bias: ", b)
+        tf.summary.histogram("{}: ".format(activation), layer_out)
 
         return layer_out
 
@@ -152,6 +160,10 @@ def conv_2d_transpose_layer(input_data, num_input_channels, num_filters, filter_
         # apply leaky relu
         layer_out = tf.nn.leaky_relu(layer_out)
 
+        tf.summary.histogram("Weights: ", w)
+        tf.summary.histogram("Bias: ", b)
+        tf.summary.histogram("Leaky ReLU: ", layer_out)
+
         return layer_out
 
 # setup average pooling layer
@@ -189,6 +201,10 @@ def fc_layer(input_data, input_shape, num_units, activation, name):
             act_layer_out = tf.nn.sigmoid(layer_out)
         else:
             raise Exception('Error({}) - None or invalid activation function specified:({})'.format(name, activation))
+
+        tf.summary.histogram("Weights: ", w)
+        tf.summary.histogram("Bias: ", b)
+        tf.summary.histogram("{}: ".format(activation), act_layer_out)
     
         return layer_out, act_layer_out
 
@@ -273,57 +289,54 @@ def discriminator(x, name, reuse=False):
         print("dis_output output shape:", get_shape(dis_output))
     return dis_output
 
-# create networks
+# create networks (create generator and feed it's output in)
 samples = generator(z=get_noise(), name="Generator")
-discrim = discriminator(x=tf.concat([x, samples], 0), name="Discriminator (real_score)")
-gan_model = discriminator(x=samples, name="Discriminator (fake_score)", reuse=True)
+
+tf.summary.image("Generator Output:", samples, params['batch_size'])
+
+real_score = discriminator(x=x, name="Discriminator (real_score)")
+fake_score = discriminator(x=samples, name="Discriminator (fake_score)", reuse=True)
 
 # define the loss function
-with tf.name_scope("d_loss"):
-    d_loss = tf.reduce_mean(
-        tf.nn.sigmoid_cross_entropy_with_logits(logits=discrim, labels=tf.concat([tf.ones([25,1]), tf.zeros([25,1])], 0))
-    )
+loss = tf.reduce_mean(
+    tf.nn.sigmoid_cross_entropy_with_logits(logits=real_score, labels=tf.ones_like(real_score)) +
+    tf.nn.sigmoid_cross_entropy_with_logits(logits=fake_score, labels=tf.zeros_like(fake_score)))
 
-with tf.name_scope("a_loss"):
-    a_loss = tf.reduce_mean(
-        tf.nn.sigmoid_cross_entropy_with_logits(logits=gan_model, labels=tf.zeros_like(gan_model))
-    )
+tf.summary.scalar("Loss", loss)
 
-gen_vars = tf.compat.v1.get_collection(tf.compat.v1.GraphKeys.TRAINABLE_VARIABLES, "generator")
-disc_vars = tf.compat.v1.get_collection(tf.compat.v1.GraphKeys.TRAINABLE_VARIABLES, "discriminator")
+gen_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "generator")
+disc_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "discriminator")
 
-# setup optimizers and update routines
-
-# Discriminator update
+# Discriminator Optimizer
 with tf.name_scope("d_train"):
-    d_opt = tf.compat.v1.train.GradientDescentOptimizer(learning_rate=params['disc_learning_rate'])
-    d_opt = d_opt.minimize(d_loss)
+    d_opt = tf.compat.v1.train.GradientDescentOptimizer(learning_rate=params['disc_learning_rate']).minimize(loss, var_list=disc_vars)
 
-# Generator update
+# Generator Optimizer
 with tf.name_scope("g_train"):
     g_opt = tf.compat.v1.train.AdamOptimizer(learning_rate=params['gen_learning_rate'],
                                             beta1=params['beta1'],
                                             beta2=params['beta2'], 
-                                            epsilon=params['epsilon'])
-    g_opt = g_opt.minimize(a_loss)
+                                            epsilon=params['epsilon']).minimize(loss, var_list=gen_vars)
 
 #setup learning procedures
-sess = tf.InteractiveSession()
+sess = tf.Session()
 sess.run(tf.compat.v1.global_variables_initializer())
 
-#writer.add_graph(sess.graph)
+writer.add_graph(sess.graph)
 print("Graph added!")
 
-# start training loop
-a_losses = []
-d_losses = []
-for i in tqdm(range(params['epochs'])):
-    _, _, l, ll = sess.run([g_opt, d_opt, d_loss, a_loss])
-    print("Epoch: {} d_loss|a_loss ----- {}|{}".format(i, l, ll))
-    d_losses.append(l)
-    a_losses.append(ll)
-    if i % 100 == 0:
-        plt.imshow(sess.run(samples)[0])
-        plt.savefig("{}_epochs.png".format(i), format='png')
+losses = []
 
-# TO DO: find out why the only output for the generator is noise, maybe something isn't connected properly? Check tensorboard
+# start training looplosses = []
+merged_summary = tf.summary.merge_all()
+for i in tqdm(range(params['epochs'])):
+    l, _, _ = sess.run([[loss], g_opt, d_opt])
+    print("Epoch: {} loss ----- {}".format(i, l))
+    losses.append(l)
+    if i % 100 == 0:
+        s = sess.run(merged_summary)
+        writer.add_summary(s, i)
+        #plt.imshow(sess.run(samples)[0])
+        #plt.savefig("{}_epochs.png".format(i), format='png')
+
+# TO DO: find out why weights are unchanging
