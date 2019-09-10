@@ -10,7 +10,7 @@ from tqdm import tqdm
 
 tf.compat.v1.random.set_random_seed(1234)
 
-writer = tf.summary.FileWriter("/home/stefan/tmp/gan/14")
+writer = tf.summary.FileWriter("/home/stefan/tmp/gan/15")
 
 # import data
 image_path = "../image_data/bad_frames/*.png"
@@ -27,7 +27,7 @@ x_train = np.array(x_train)
 print("\n{} Images Imported!".format(len(x_train)))
 
 # normalize the data
-x_train = x_train / 255.
+#x_train = x_train / 255.
 
 # define dictionary for parameters
 params = dict(
@@ -316,7 +316,7 @@ with tf.name_scope("g_train"):
     g_opt = tf.compat.v1.train.AdamOptimizer(learning_rate=params['gen_learning_rate'],
                                             beta1=params['beta1'],
                                             beta2=params['beta2'], 
-                                            epsilon=params['epsilon']).minimize(loss, var_list=gen_vars)
+                                            epsilon=params['epsilon']).minimize(-loss, var_list=gen_vars)
 
 #setup learning procedures
 sess = tf.Session()
