@@ -51,6 +51,8 @@ params = dict(
 #x_train = rgb2gray(x_train) 
 
 # Create tensorflow dataset and corresponding iterator with the imported data
+# TO DO: fix "ValueError: Cannot create a tensor proto whose content is larger than 2GB." see https://stackoverflow.com/questions/51470991/create-a-tensor-proto-whose-content-is-larger-than-2gb
+
 with tf.name_scope("data"):
     dataset = tf.data.Dataset.from_tensor_slices(x_train).batch(params['batch_size'])
     dataset = dataset.shuffle(len(x_train))
@@ -355,5 +357,3 @@ for i in tqdm(range(params['epochs'])):
         writer.add_summary(s, i)
         #plt.imshow(sess.run(samples)[0])
         #plt.savefig("{}_epochs.png".format(i), format='png')
-
-# TO DO: find out why discriminator output only 0 or 1
