@@ -10,10 +10,10 @@ from tqdm import tqdm
 
 tf.compat.v1.random.set_random_seed(1234)
 
-writer = tf.summary.FileWriter("/home/stefan/tmp/paper_gan/3")
+writer = tf.summary.FileWriter("/home/stefan/tmp/paper_gan/5")
 
 # import data
-image_path = "../image_data/bad_frames/*.png"
+image_path = "../image_data/good_frames/*.png"
 
 print("Importing Images from: {}\n".format(image_path))
 
@@ -39,9 +39,9 @@ params = dict(
     width = 100, 
     channels = 3,
 
-    disc_learning_rate = 5.0,
-    gen_learning_rate= 5.0,
-    beta1=0.9,
+    disc_learning_rate = 0.0002,
+    gen_learning_rate= 0.0002,
+    beta1=0.5,
     beta2=0.999,
     epsilon=1e-07
 )
@@ -97,8 +97,8 @@ def conv_2d_layer(input_data, num_input_channels, num_filters, filter_shape, act
                             num_input_channels, num_filters]
     
         # init weights and bias
-        w = tf.compat.v1.get_variable(name=name+"_W", shape=conv_filter_shape, dtype=tf.float32, initializer=tf.initializers.truncated_normal)
-        b = tf.compat.v1.get_variable(name=name+"_b", shape=[num_filters], dtype=tf.float32, initializer=tf.initializers.truncated_normal)
+        w = tf.compat.v1.get_variable(name=name+"_W", shape=conv_filter_shape, dtype=tf.float32, initializer=tf.initializers.truncated_normal(stddev=0.02))
+        b = tf.compat.v1.get_variable(name=name+"_b", shape=[num_filters], dtype=tf.float32, initializer=tf.initializers.truncated_normal(stddev=0.02))
 
         # setup strides
         stride = [1, stride[0], stride[1], 1]
@@ -145,8 +145,8 @@ def conv_2d_transpose_layer(input_data, num_input_channels, num_filters, filter_
         output_shape = [input_shape[0], input_shape[1] * 2, input_shape[2] * 2, num_filters]
 
         # init weights and bias
-        w = tf.compat.v1.get_variable(name=name+"_W", shape=conv_filter_shape, dtype=tf.float32, initializer=tf.initializers.truncated_normal)
-        b = tf.compat.v1.get_variable(name=name+"_b", shape=[num_filters], dtype=tf.float32, initializer=tf.initializers.truncated_normal)
+        w = tf.compat.v1.get_variable(name=name+"_W", shape=conv_filter_shape, dtype=tf.float32, initializer=tf.initializers.truncated_normal(stddev=0.02))
+        b = tf.compat.v1.get_variable(name=name+"_b", shape=[num_filters], dtype=tf.float32, initializer=tf.initializers.truncated_normal(stddev=0.02))
 
         # setup strides
         stride = [1, stride[0], stride[1], 1]
@@ -181,8 +181,8 @@ def avg_pooling(input_data, pool_shape, stride, padding):
 def fc_layer(input_data, input_shape, num_units, activation, name):
     with tf.name_scope("fc"):
         # setup weights and bias
-        w = tf.compat.v1.get_variable(name=name+"_W", shape=[input_shape[1], num_units], dtype=tf.float32, initializer=tf.initializers.truncated_normal)
-        b = tf.compat.v1.get_variable(name=name+"_b", shape=[num_units], dtype=tf.float32, initializer=tf.initializers.truncated_normal)
+        w = tf.compat.v1.get_variable(name=name+"_W", shape=[input_shape[1], num_units], dtype=tf.float32, initializer=tf.initializers.truncated_normal(stddev=0.02))
+        b = tf.compat.v1.get_variable(name=name+"_b", shape=[num_units], dtype=tf.float32, initializer=tf.initializers.truncated_normal(stddev=0.02))
 
         # setup matmul op
         layer_out = tf.matmul(input_data, w)
@@ -213,21 +213,6 @@ def concatenate_layer(real_data, generated_data):
     layer_out = tf.concat(real_data, generated_data, 0)
     return layer_out
 
-def batch_norm(input_tensor, name, offset=0, scale=1, variance_epsilon=1.0e+06,):
-    mean = tf.math.reduce_mean(input_tensor)
-    variance = tf.math.reduce_std(input_tensor)
-    offset = offset
-    scale = scale
-    variance_epsilon = variance_epsilon
-    norm = tf.nn.batch_normalization(x=input_tensor, 
-                                    mean=mean,
-                                    variance=variance,
-                                    offset=offset,
-                                    scale=scale,
-                                    variance_epsilon=variance_epsilon,
-                                    name=name)
-    return norm
-
 # --- define the Generative Adversarial Network ---
 # ----- define Generator Network -----
 def generator(z, name):
@@ -241,9 +226,9 @@ def generator(z, name):
         # out: (batch_size 160000)
         print("gen_fc1 output shape:", get_shape(gen_fc1))
 
-        batch_norm1 = batch_norm(gen_fc1, name=name+"_batch_norm1")
+        gen_fc1 = tf.contrib.layers.batch_norm(gen_fc1, decay=0.9, epsilon=1e-5)
 
-        gen_reshape = tf.reshape(batch_norm1, [-1 ,50, 50, 64])
+        gen_reshape = tf.reshape(gen_fc1, [-1 ,50, 50, 64])
         # out: (batch_size 50, 50, 64)
         print("gen_reshape output shape:", get_shape(gen_reshape))
 
@@ -251,27 +236,27 @@ def generator(z, name):
         # out: (batch_size 50, 50, 128)
         print("gen_conv1 output shape:", get_shape(gen_conv1))
 
-        batch_norm2 = batch_norm(gen_conv1, name=name+"_batch_norm2")
+        gen_conv1 = tf.contrib.layers.batch_norm(gen_conv1, decay=0.9, epsilon=1e-5)
 
-        gen_conv_t1 = conv_2d_transpose_layer(batch_norm2, 128, 128, (4, 4), (2, 2), "SAME", "gen_conv_t1")
+        gen_conv_t1 = conv_2d_transpose_layer(gen_conv1, 128, 128, (4, 4), (2, 2), "SAME", "gen_conv_t1")
         # out: (batch_size 100, 100, 128)
         print("gen_conv_t1 output shape:", get_shape(gen_conv_t1))
 
-        batch_norm3 = batch_norm(gen_conv_t1, name=name+"_batch_norm3")
+        gen_conv_t1 = tf.contrib.layers.batch_norm(gen_conv_t1, decay=0.9, epsilon=1e-5)
 
-        gen_conv2 = conv_2d_layer(batch_norm3, 128, 128, (5, 5), "leaky_relu", (1, 1), "SAME", "gen_conv2")
+        gen_conv2 = conv_2d_layer(gen_conv_t1, 128, 128, (5, 5), "leaky_relu", (1, 1), "SAME", "gen_conv2")
         # out: (batch_size 100, 100, 128)
         print("gen_conv2 output shape:", get_shape(gen_conv2))
 
-        batch_norm4 = batch_norm(gen_conv2, name=name+"_batch_norm4")
+        gen_conv2 = tf.contrib.layers.batch_norm(gen_conv2, decay=0.9, epsilon=1e-5)
 
-        gen_conv3 = conv_2d_layer(batch_norm4, 128, 128, (5, 5), "leaky_relu", (1, 1), "SAME", "gen_conv3")
+        gen_conv3 = conv_2d_layer(gen_conv2, 128, 128, (5, 5), "leaky_relu", (1, 1), "SAME", "gen_conv3")
         # out: (batch_size 100, 100, 128)
         print("gen_conv3 output shape:", get_shape(gen_conv3))
 
-        batch_norm5 = batch_norm(gen_conv3, name=name+"_batch_norm5")
+        gen_conv3 = tf.contrib.layers.batch_norm(gen_conv3, decay=0.9, epsilon=1e-5)
 
-        gen_conv4 = conv_2d_layer(batch_norm5, 128, 3, (7, 7), "tanh", (1, 1), "SAME", "gen_conv4") # NOTE: this tanh activation causes problems with really small floats
+        gen_conv4 = conv_2d_layer(gen_conv3, 128, 3, (7, 7), "tanh", (1, 1), "SAME", "gen_conv4") # NOTE: this tanh activation causes problems with really small floats
         # out: (batch_size 100, 100, 3)
         print("gen_conv4 output shape:", get_shape(gen_conv4))
 
@@ -289,27 +274,27 @@ def discriminator(x, name, reuse=False):
         # out: (batch_size 98, 98, 128)
         print("dis_conv1 output shape:", get_shape(dis_conv1))
 
-        batch_norm1 = batch_norm(dis_conv1, name=name+"_batch_norm1")
+        dis_conv1 = tf.contrib.layers.batch_norm(dis_conv1, decay=0.9, epsilon=1e-5)
 
-        dis_conv2 = conv_2d_layer(batch_norm1, 128, 128, (4, 4), "leaky_relu", (2, 2), "VALID", "dis_conv2")
+        dis_conv2 = conv_2d_layer(dis_conv1, 128, 128, (4, 4), "leaky_relu", (2, 2), "VALID", "dis_conv2")
         # out: (batch_size 48, 48, 128)
         print("dis_conv2 output shape:", get_shape(dis_conv2))
 
-        batch_norm2 = batch_norm(dis_conv2, name=name+"_batch_norm2")
+        dis_conv2 = tf.contrib.layers.batch_norm(dis_conv2, decay=0.9, epsilon=1e-5)
 
-        dis_conv3 = conv_2d_layer(batch_norm2, 128, 128, (4, 4), "leaky_relu", (2, 2), "VALID", "dis_conv3")
+        dis_conv3 = conv_2d_layer(dis_conv2, 128, 128, (4, 4), "leaky_relu", (2, 2), "VALID", "dis_conv3")
         # out: (batch_size 23, 23, 128)
         print("dis_conv3 output shape:", get_shape(dis_conv3))
 
-        batch_norm3 = batch_norm(dis_conv3, name=name+"_batch_norm3")
+        dis_conv3 = tf.contrib.layers.batch_norm(dis_conv3, decay=0.9, epsilon=1e-5)
 
-        dis_conv4 = conv_2d_layer(batch_norm3, 128, 128, (4, 4), "leaky_relu", (2, 2), "VALID", "dis_conv4")
+        dis_conv4 = conv_2d_layer(dis_conv3, 128, 128, (4, 4), "leaky_relu", (2, 2), "VALID", "dis_conv4")
         # out: (batch_size 10, 10, 128)
         print("dis_conv4 output shape:", get_shape(dis_conv4))
 
-        batch_norm4 = batch_norm(dis_conv4, name=name+"_batch_norm4")
+        dis_conv4 = tf.contrib.layers.batch_norm(dis_conv4, decay=0.9, epsilon=1e-5)
 
-        dis_flatten = tf.reshape(batch_norm4, [-1, 10 * 10 * 128])
+        dis_flatten = tf.reshape(dis_conv4, [-1, 10 * 10 * 128])
         # out: (batch_size 12800)
         print("dis_flatten output shape:", get_shape(dis_flatten))
 
@@ -342,14 +327,12 @@ disc_vars = tf.get_collection(tf.GraphKeys.TRAINABLE_VARIABLES, "discriminator")
 
 # Discriminator Optimizer
 with tf.name_scope("d_train"):
-    d_opt = tf.compat.v1.train.GradientDescentOptimizer(learning_rate=params['disc_learning_rate']).minimize(-d_loss, var_list=disc_vars)
+    d_opt = tf.compat.v1.train.AdamOptimizer(learning_rate=params['disc_learning_rate'], beta1=params['beta1']).minimize(-d_loss, var_list=disc_vars)
 
 # Generator Optimizer
 with tf.name_scope("g_train"):
     g_opt = tf.compat.v1.train.AdamOptimizer(learning_rate=params['gen_learning_rate'],
-                                            beta1=params['beta1'],
-                                            beta2=params['beta2'], 
-                                            epsilon=params['epsilon']).minimize(-g_loss, var_list=gen_vars)
+                                            beta1=params['beta1'],).minimize(-g_loss, var_list=gen_vars)
 
 #setup learning procedures
 sess = tf.Session()
